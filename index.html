@@ -69,6 +69,17 @@
       Log completadas
     </button>
 
+    <button class="nav-item" onclick="setView('calendario')" id="nav-calendario">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <rect x="1" y="2" width="12" height="11" rx="2" stroke="currentColor" stroke-width="1.2"/>
+        <path d="M4 1v2M10 1v2M1 6h12" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+        <circle cx="4.5" cy="9.5" r=".8" fill="currentColor"/>
+        <circle cx="7" cy="9.5" r=".8" fill="currentColor"/>
+        <circle cx="9.5" cy="9.5" r=".8" fill="currentColor"/>
+      </svg>
+      Calendario
+    </button>
+
     <button class="nav-item" onclick="setView('stats')" id="nav-stats">
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
         <path d="M2 10V7M5 10V5M8 10V3M11 10V6" stroke="currentColor"
@@ -166,25 +177,35 @@
 </div>
 
 
-<!-- Reschedule / move task -->
-<div class="modal-backdrop" id="reschedule-modal">
-  <div class="modal" style="width:340px">
-    <h2>Mover tarea</h2>
-    <p id="reschedule-task-name"
-       style="font-size:13px;color:var(--text2);margin-bottom:16px"></p>
+<!-- Edit task -->
+<div class="modal-backdrop" id="edit-task-modal">
+  <div class="modal" style="width:360px">
+    <h2>Editar tarea</h2>
+    <p id="edit-task-habit-note"
+       style="font-size:11px;color:var(--text3);margin-bottom:14px;display:none">
+      &#x21BB; Solo modifica esta ocurrencia, no afecta la rutina.
+    </p>
 
     <div class="modal-field">
-      <label class="modal-label">Nueva fecha</label>
-      <input type="date" class="modal-input" id="reschedule-date" style="color-scheme:dark">
+      <label class="modal-label">Nombre</label>
+      <input type="text" class="modal-input" id="edit-task-name" placeholder="Nombre de la tarea">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Categoría</label>
+      <select class="modal-input" id="edit-task-cat"></select>
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Fecha</label>
+      <input type="date" class="modal-input" id="edit-task-due" style="color-scheme:dark">
     </div>
     <div class="modal-field">
       <label class="modal-label">Hora (opcional)</label>
-      <input type="time" class="modal-input" id="reschedule-time" style="color-scheme:dark">
+      <input type="time" class="modal-input" id="edit-task-time" style="color-scheme:dark">
     </div>
 
     <div class="modal-actions">
-      <button class="modal-btn" onclick="closeModal('reschedule-modal')">Cancelar</button>
-      <button class="modal-btn primary" onclick="confirmReschedule()">Mover</button>
+      <button class="modal-btn" onclick="closeModal('edit-task-modal')">Cancelar</button>
+      <button class="modal-btn primary" onclick="confirmEditTask()">Guardar</button>
     </div>
   </div>
 </div>

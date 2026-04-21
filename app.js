@@ -77,6 +77,9 @@ let filterCatId   = null;
 let sortBy        = 'due';
 let statsMonth    = new Date().getMonth();
 let statsYear     = new Date().getFullYear();
+let calendarMonth = new Date().getMonth();
+let calendarYear  = new Date().getFullYear();
+let calendarSelectedDay = null;
 
 // Editing state for modals
 let editingHabitId = null;
@@ -184,9 +187,10 @@ function dueDateClass(due) {
 /** Which view section a task belongs to based on its due date */
 function taskSection(task) {
   if (!task.due) return 'luego';
-  const today = todayStr(), endWeek = weekEnd();
-  if (task.due <= today)   return 'hoy';
-  if (task.due <= endWeek) return 'semana';
+  const today = todayStr(), yesterday = offsetDate(-1), endWeek = weekEnd();
+  if (task.due === today || task.due === yesterday) return 'hoy';
+  if (task.due < yesterday) return 'vencida';
+  if (task.due <= endWeek)  return 'semana';
   return 'luego';
 }
 
@@ -249,17 +253,24 @@ function hexToRgba(hex, alpha) {
 // ── 7. Task row HTML builder ──────────────────────────────────────────────────
 
 function taskRowHTML(task) {
-  const cat    = getCat(task.cat);
-  const dc     = dueDateClass(task.due);
-  const dl     = dueDateLabel(task.due);
-  const catBg  = hexToRgba(cat.color, 0.09);
+  const cat   = getCat(task.cat);
+  const catBg = hexToRgba(cat.color, 0.09);
+
+  // For completed tasks, override the overdue label/class
+  let dc = dueDateClass(task.due);
+  let dl = dueDateLabel(task.due);
+  if (task.done && dc === 'overdue') {
+    const completedLate = task.completedAt && task.due && task.completedAt > task.due;
+    dc = completedLate ? 'soon' : '';
+    dl = completedLate ? 'con retraso' : formatDateShort(task.due);
+  }
   const habit  = task.habitId ? state.habits.find(h => h.id === task.habitId) : null;
 
   const habitBadge = habit
     ? `<span class="habit-badge ${task.done ? 'completed' : ''}">&#x21BB; ${habit.name}</span>`
     : '';
   const rescheduleBtnHTML = !task.done
-    ? `<button class="reschedule-btn" onclick="openRescheduleModal(${task.id}, event)">mover</button>`
+    ? `<button class="reschedule-btn" onclick="openEditTaskModal(${task.id}, event)">editar</button>`
     : '';
   const timeBadge = task.time
     ? `<span class="task-time">${task.time}</span>`
@@ -296,10 +307,11 @@ function taskRowHTML(task) {
 function renderMain() {
   const container = document.getElementById('main');
 
-  if (currentView === 'stats')    { container.innerHTML = buildStatsView();    return; }
-  if (currentView === 'habitos')  { container.innerHTML = buildHabitsView();   return; }
-  if (currentView === 'log')      { container.innerHTML = buildLogView();      return; }
-  if (currentView === 'vencidas') { container.innerHTML = buildOverdueView();  return; }
+  if (currentView === 'stats')      { container.innerHTML = buildStatsView();      return; }
+  if (currentView === 'habitos')    { container.innerHTML = buildHabitsView();     return; }
+  if (currentView === 'log')        { container.innerHTML = buildLogView();        return; }
+  if (currentView === 'vencidas')   { container.innerHTML = buildOverdueView();    return; }
+  if (currentView === 'calendario') { container.innerHTML = buildCalendarView();   return; }
   if (filterCatId)                { container.innerHTML = buildCategoryView(filterCatId); return; }
 
   container.innerHTML = buildTaskView();
@@ -320,7 +332,15 @@ function buildTaskView() {
   tasks = sortTasks(tasks);
 
   const pending = tasks.filter(t => !t.done);
-  const done    = tasks.filter(t =>  t.done);
+  const done    = currentView === 'hoy'
+    ? sortTasks(state.tasks.filter(t => t.done && t.completedAt === todayStr()))
+    : currentView === 'semana'
+    ? sortTasks(state.tasks.filter(t => {
+        if (!t.done) return false;
+        const d = t.completedAt || t.due;
+        return d && d >= weekStart() && d <= weekEnd();
+      }))
+    : tasks.filter(t => t.done);
 
   return `
     <div class="page-header">
@@ -339,10 +359,12 @@ function buildTaskView() {
 }
 
 function buildStatChips() {
-  const today       = todayStr();
-  const allToday    = state.tasks.filter(t => t.due && t.due <= today);
-  const doneToday   = allToday.filter(t => t.done).length;
-  const habDoneToday = state.habits.filter(h => h.occurrences.find(o => o.date === today && o.done)).length;
+  const today        = todayStr();
+  const allToday     = state.tasks.filter(t => t.due === today);
+  const doneToday    = allToday.filter(t => t.done).length;
+  const todayDow     = new Date().getDay();
+  const habitsToday  = state.habits.filter(h => h.days.includes(todayDow));
+  const habDoneToday = habitsToday.filter(h => h.occurrences.find(o => o.date === today && o.done)).length;
   const overdueCount = state.tasks.filter(t => !t.done && t.due && t.due < today).length;
 
   return `
@@ -352,7 +374,7 @@ function buildStatChips() {
         <div class="label">tareas hoy</div>
       </div>
       <div class="stat-chip">
-        <div class="value">${habDoneToday}/${state.habits.length}</div>
+        <div class="value">${habDoneToday}/${habitsToday.length}</div>
         <div class="label">rutinas hoy</div>
       </div>
       ${overdueCount ? `
@@ -519,7 +541,7 @@ function buildHabitsView() {
       const linkedTask = state.tasks.find(t => t.id === o.taskId);
       const label = linkedTask ? linkedTask.name : habit.name;
       const dayAbbr = DAY_NAMES_FULL[new Date(o.date + 'T12:00:00').getDay()].slice(0, 3);
-      const dayColor = dc === 'today' ? 'var(--accent)' : dc === 'overdue' ? 'var(--red)' : 'var(--text3)';
+      const dayColor = o.done ? 'var(--text3)' : dc === 'today' ? 'var(--accent)' : dc === 'overdue' ? 'var(--red)' : 'var(--text3)';
 
       return `
         <div class="occurrence-item">
@@ -877,6 +899,7 @@ function toggleTask(taskId) {
   task.done = !task.done;
 
   if (task.done) {
+    task.completedAt = todayStr();
     // Add to log
     state.log.push({
       id: state.nextId++,
@@ -894,6 +917,7 @@ function toggleTask(taskId) {
       }
     }
   } else {
+    task.completedAt = null;
     // Undo: remove most recent log entry for this task
     for (let i = state.log.length - 1; i >= 0; i--) {
       if (state.log[i].name === task.name) { state.log.splice(i, 1); break; }
@@ -953,25 +977,38 @@ function addTask() {
 }
 
 
-// ── 17. Reschedule modal ──────────────────────────────────────────────────────
+// ── 17. Edit task modal ───────────────────────────────────────────────────────
 
-function openRescheduleModal(taskId, event) {
+function openEditTaskModal(taskId, event) {
   event.stopPropagation();
   const task = state.tasks.find(t => t.id === taskId);
   if (!task) return;
 
   reschedulingTaskId = taskId;
-  document.getElementById('reschedule-task-name').textContent = task.name;
-  document.getElementById('reschedule-date').value = task.due || todayStr();
-  document.getElementById('reschedule-time').value = task.time || '';
-  document.getElementById('reschedule-modal').classList.add('open');
+
+  document.getElementById('edit-task-name').value = task.name;
+  document.getElementById('edit-task-due').value  = task.due  || todayStr();
+  document.getElementById('edit-task-time').value = task.time || '';
+
+  const catSelect = document.getElementById('edit-task-cat');
+  catSelect.innerHTML = state.categories
+    .map(c => `<option value="${c.id}"${c.id === task.cat ? ' selected' : ''}>${c.name}</option>`)
+    .join('');
+
+  const note = document.getElementById('edit-task-habit-note');
+  note.style.display = task.habitId ? '' : 'none';
+
+  document.getElementById('edit-task-modal').classList.add('open');
 }
 
-function confirmReschedule() {
+function confirmEditTask() {
   const task = state.tasks.find(t => t.id === reschedulingTaskId);
   if (task) {
-    task.due  = document.getElementById('reschedule-date').value;
-    task.time = document.getElementById('reschedule-time').value || '';
+    const newName = document.getElementById('edit-task-name').value.trim();
+    if (newName) task.name = newName;
+    task.cat  = document.getElementById('edit-task-cat').value;
+    task.due  = document.getElementById('edit-task-due').value;
+    task.time = document.getElementById('edit-task-time').value || '';
     if (task.habitId) {
       const habit = state.habits.find(h => h.id === task.habitId);
       if (habit) {
@@ -980,7 +1017,7 @@ function confirmReschedule() {
       }
     }
   }
-  closeModal('reschedule-modal');
+  closeModal('edit-task-modal');
   saveState();
   render();
 }
@@ -1213,7 +1250,123 @@ function deleteCat(catId) {
 }
 
 
-// ── 20. Navigation & sidebar ──────────────────────────────────────────────────
+// ── 20. Calendar view ─────────────────────────────────────────────────────────
+
+function changeCalendarMonth(delta) {
+  calendarMonth += delta;
+  if (calendarMonth > 11) { calendarMonth = 0; calendarYear++; }
+  if (calendarMonth < 0)  { calendarMonth = 11; calendarYear--; }
+  calendarSelectedDay = null;
+  render();
+}
+
+function calendarGoToToday() {
+  calendarMonth = new Date().getMonth();
+  calendarYear  = new Date().getFullYear();
+  calendarSelectedDay = todayStr();
+  render();
+}
+
+function calendarSelectDay(dateStr) {
+  calendarSelectedDay = calendarSelectedDay === dateStr ? null : dateStr;
+  render();
+}
+
+function buildCalendarView() {
+  const today = todayStr();
+  const yr = calendarYear, mn = calendarMonth;
+
+  const firstDay   = new Date(yr, mn, 1);
+  const startDow   = firstDay.getDay();
+  const backDays   = startDow === 0 ? 6 : startDow - 1;
+  const gridStart  = new Date(firstDay);
+  gridStart.setDate(gridStart.getDate() - backDays);
+
+  const dayCells = [];
+  const cursor = new Date(gridStart);
+  for (let i = 0; i < 42; i++) {
+    dayCells.push(new Date(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  const headerCells = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']
+    .map(d => `<div class="cal-header-cell">${d}</div>`).join('');
+
+  const cells = dayCells.map(d => {
+    const ds      = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    const isToday    = ds === today;
+    const isOther    = d.getMonth() !== mn;
+    const isSelected = ds === calendarSelectedDay;
+
+    const tasks   = state.tasks.filter(t => t.due === ds);
+    const shown   = tasks.slice(0, 3);
+    const extra   = tasks.length - shown.length;
+
+    const pills = shown.map(t => {
+      const cat = getCat(t.cat);
+      return `<div class="cal-task-pill${t.done ? ' done' : ''}"
+        style="background:${hexToRgba(cat.color, .18)};color:${cat.color}"
+        >${t.name}</div>`;
+    }).join('');
+
+    const extraBadge = extra > 0
+      ? `<div class="cal-extra">+${extra} más</div>`
+      : '';
+
+    const cls = ['cal-day',
+      isToday    ? 'today'       : '',
+      isOther    ? 'other-month' : '',
+      isSelected ? 'selected'    : '',
+    ].filter(Boolean).join(' ');
+
+    return `
+      <div class="${cls}" onclick="calendarSelectDay('${ds}')">
+        <div class="cal-day-num">${d.getDate()}</div>
+        <div class="cal-tasks">${pills}${extraBadge}</div>
+      </div>`;
+  }).join('');
+
+  let dayPanel = '';
+  if (calendarSelectedDay) {
+    const selDate  = new Date(calendarSelectedDay + 'T12:00:00');
+    const selLabel = `${DAY_NAMES_FULL[selDate.getDay()]} ${selDate.getDate()} de ${MONTH_NAMES[selDate.getMonth()]}`;
+    const selTasks = sortTasks(state.tasks.filter(t => t.due === calendarSelectedDay));
+    const pending  = selTasks.filter(t => !t.done);
+    const done     = selTasks.filter(t =>  t.done);
+
+    dayPanel = `
+      <div class="cal-day-panel">
+        <div class="cal-day-panel-title">${selLabel}</div>
+        <div class="task-list">
+          ${pending.length
+            ? pending.map(taskRowHTML).join('')
+            : '<div class="empty-state" style="padding:16px 0;font-size:13px">Sin tareas pendientes</div>'}
+          ${done.length
+            ? `<div class="section-divider">Completadas</div>${done.map(taskRowHTML).join('')}`
+            : ''}
+        </div>
+      </div>`;
+  }
+
+  return `
+    <div class="page-header">
+      <div>
+        <div class="page-title">Calendario</div>
+        <div class="page-subtitle" style="font-family:var(--mono)">${MONTH_NAMES[mn]} ${yr}</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button class="modal-btn" onclick="changeCalendarMonth(-1)" style="padding:5px 10px">&#x2190;</button>
+        <button class="modal-btn" onclick="calendarGoToToday()" style="padding:5px 12px;font-size:12px">hoy</button>
+        <button class="modal-btn" onclick="changeCalendarMonth(1)"  style="padding:5px 10px">&#x2192;</button>
+      </div>
+    </div>
+    <div class="cal-grid-header">${headerCells}</div>
+    <div class="cal-grid">${cells}</div>
+    ${dayPanel}`;
+}
+
+
+// ── 21. Navigation & sidebar ──────────────────────────────────────────────────
 
 function setView(viewName) {
   currentView = viewName;
