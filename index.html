@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Taskboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ── Sidebar ─────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">// taskboard</div>
+
+    <div class="nav-section-label">Vistas</div>
+
+    <button class="nav-item active" onclick="setView('hoy')" id="nav-hoy">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <rect x="1" y="2" width="12" height="11" rx="2" stroke="currentColor" stroke-width="1.2"/>
+        <path d="M4 1v2M10 1v2M1 6h12" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+      </svg>
+      Hoy
+      <span class="count" id="cnt-hoy">0</span>
+    </button>
+
+    <button class="nav-item" onclick="setView('semana')" id="nav-semana">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <rect x="1" y="2" width="12" height="11" rx="2" stroke="currentColor" stroke-width="1.2"/>
+        <path d="M4 1v2M10 1v2M1 6h12" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+      </svg>
+      Esta semana
+      <span class="count" id="cnt-semana">0</span>
+    </button>
+
+    <button class="nav-item" onclick="setView('luego')" id="nav-luego">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.2"/>
+        <path d="M7 4v3l2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+      </svg>
+      Luego
+      <span class="count" id="cnt-luego">0</span>
+    </button>
+
+    <button class="nav-item" onclick="setView('vencidas')" id="nav-vencidas">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.2"/>
+        <path d="M7 4v3M7 10v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      Vencidas
+      <span class="count red" id="cnt-vencidas"></span>
+    </button>
+
+    <button class="nav-item" onclick="setView('habitos')" id="nav-habitos">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M2 10L5 7l2 2 5-6" stroke="currentColor" stroke-width="1.2"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      Rutinas
+    </button>
+
+    <button class="nav-item" onclick="setView('log')" id="nav-log">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <rect x="1" y="1" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.2"/>
+        <path d="M4 5h6M4 8h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+      </svg>
+      Log completadas
+    </button>
+
+    <button class="nav-item" onclick="setView('stats')" id="nav-stats">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M2 10V7M5 10V5M8 10V3M11 10V6" stroke="currentColor"
+              stroke-width="1.2" stroke-linecap="round"/>
+      </svg>
+      Resumen mensual
+    </button>
+
+    <div class="nav-section-label" style="margin-top:8px">Categorias</div>
+    <div id="cat-nav-list"></div>
+
+    <div class="sidebar-footer">
+      <button class="manage-cats-btn" onclick="openCatModal()">+ gestionar categorias</button>
+    </div>
+  </aside>
+
+  <!-- ── Main content (rendered by JS) ───────────────────── -->
+  <main class="main" id="main"></main>
+
+</div><!-- .app -->
+
+
+<!-- ══════════════════════════════════════════════════════════
+     MODALS
+     ══════════════════════════════════════════════════════════ -->
+
+<!-- Category manager -->
+<div class="modal-backdrop" id="cat-modal">
+  <div class="modal">
+    <h2>Gestionar categorias</h2>
+    <div id="cat-modal-list"></div>
+
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+      <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Nueva categoria</div>
+      <div class="modal-field">
+        <label class="modal-label">Nombre</label>
+        <input class="modal-input" id="new-cat-name" placeholder="ej: Finanzas">
+      </div>
+      <div class="modal-field">
+        <label class="modal-label">Color</label>
+        <div class="color-picker-row" id="new-cat-color-picker"></div>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="modal-btn" onclick="closeModal('cat-modal')">Cerrar</button>
+      <button class="modal-btn primary" onclick="addCategory()">Agregar</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- Habit create / edit -->
+<div class="modal-backdrop" id="habit-modal">
+  <div class="modal">
+    <h2 id="habit-modal-title">Nueva rutina</h2>
+
+    <div class="modal-field">
+      <label class="modal-label">Nombre de la rutina</label>
+      <input class="modal-input" id="habit-name-input" placeholder="ej: Gym">
+    </div>
+
+    <div class="modal-field">
+      <label class="modal-label">Categoria</label>
+      <select class="modal-input" id="habit-cat-select"></select>
+    </div>
+
+    <div class="modal-field">
+      <label class="modal-label">Dias de la semana</label>
+      <div class="day-toggle-row" id="habit-day-toggles">
+        <button class="day-toggle-btn" data-d="1">lun</button>
+        <button class="day-toggle-btn" data-d="2">mar</button>
+        <button class="day-toggle-btn" data-d="3">mie</button>
+        <button class="day-toggle-btn" data-d="4">jue</button>
+        <button class="day-toggle-btn" data-d="5">vie</button>
+        <button class="day-toggle-btn" data-d="6">sab</button>
+        <button class="day-toggle-btn" data-d="0">dom</button>
+      </div>
+    </div>
+
+    <!-- Per-day labels (shown once days are selected) -->
+    <div class="modal-field" id="day-labels-section" style="display:none">
+      <label class="modal-label">Nombre por dia (opcional)</label>
+      <div id="day-labels-container"></div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="modal-btn danger" id="habit-delete-btn"
+              style="display:none;margin-right:auto"
+              onclick="deleteHabit()">Eliminar</button>
+      <button class="modal-btn" onclick="closeModal('habit-modal')">Cancelar</button>
+      <button class="modal-btn primary" onclick="saveHabit()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- Reschedule / move task -->
+<div class="modal-backdrop" id="reschedule-modal">
+  <div class="modal" style="width:340px">
+    <h2>Mover tarea</h2>
+    <p id="reschedule-task-name"
+       style="font-size:13px;color:var(--text2);margin-bottom:16px"></p>
+
+    <div class="modal-field">
+      <label class="modal-label">Nueva fecha</label>
+      <input type="date" class="modal-input" id="reschedule-date" style="color-scheme:dark">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Hora (opcional)</label>
+      <input type="time" class="modal-input" id="reschedule-time" style="color-scheme:dark">
+    </div>
+
+    <div class="modal-actions">
+      <button class="modal-btn" onclick="closeModal('reschedule-modal')">Cancelar</button>
+      <button class="modal-btn primary" onclick="confirmReschedule()">Mover</button>
+    </div>
+  </div>
+</div>
+
+
+<script src="app.js"></script>
+</body>
+</html>
