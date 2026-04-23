@@ -125,6 +125,11 @@ function setupRealtimeSync() {
   });
 }
 
+// JSON.parse(JSON.stringify()) elimina valores undefined que Firestore rechaza
+function cleanForFirestore(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
+
 function saveState() {
   // 1. Guardamos en localStorage (instantáneo, funciona offline)
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
@@ -132,34 +137,40 @@ function saveState() {
   // 2. Si Firebase está listo, sincronizamos a la nube en segundo plano
   if (db) {
     ownSaveInFlight = true;
-    db.collection('taskboard').doc('state').set(state)
+    db.collection('taskboard').doc('state').set(cleanForFirestore(state))
       .catch(e => console.warn('[Firebase] save error:', e.message))
       .finally(() => { setTimeout(() => { ownSaveInFlight = false; }, 300); });
   }
 }
 
 async function loadState() {
-  // Paso 1: cargamos localStorage para que la UI aparezca de inmediato
+  // Paso 1: cargamos localStorage para mostrar algo de inmediato
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) state = Object.assign({}, state, JSON.parse(saved));
   } catch (e) {}
 
-  // Paso 2: si Firebase está disponible, traemos la versión definitiva desde la nube
-  // (puede tener cambios hechos desde otro dispositivo)
   if (db) {
     try {
       const snapshot = await db.collection('taskboard').doc('state').get();
-      if (snapshot.exists && snapshot.data()?.tasks) {
+
+      if (snapshot.exists && snapshot.data()?.tasks?.length) {
+        // Firestore tiene datos → es la fuente de verdad
         state = snapshot.data();
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); // actualizamos caché local
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } else if (state.tasks?.length) {
+        // Firestore está vacío pero localStorage tiene datos:
+        // primera vez que abrimos con Firebase configurado → subimos todo
+        console.log('[Firebase] Subiendo datos locales a Firestore...');
+        await db.collection('taskboard').doc('state').set(cleanForFirestore(state));
+        console.log('[Firebase] Sincronización inicial completada.');
       }
     } catch (e) {
       console.warn('[Firebase] load error, usando localStorage:', e.message);
     }
   }
 
-  if (!state.tasks.length && !state.habits.length) seedDemoData();
+  if (!state.tasks?.length && !state.habits?.length) seedDemoData();
   ensureWeeklyOccurrences();
 }
 
