@@ -1125,7 +1125,10 @@ function buildAddForm() {
           ${state.categories.map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
         </select>
         <input type="date" class="add-date" id="new-task-due" value="${defaultDate}">
-        <input type="time" class="add-time" id="new-task-time">
+        <label class="add-time-wrap">
+          <span class="add-time-label">hora</span>
+          <input type="time" class="add-time" id="new-task-time">
+        </label>
         <div style="flex:1"></div>
         <button class="add-btn" onclick="addTask()">+ Agregar</button>
       </div>

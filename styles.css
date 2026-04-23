@@ -454,18 +454,34 @@ body {
   cursor: pointer;
   color-scheme: dark;
 }
-.add-time {
+.add-time-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   background: var(--surface2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.add-time-label {
+  font-size: 12px;
+  font-family: var(--mono);
   color: var(--text3);
+  pointer-events: none;
+}
+.add-time {
+  background: transparent;
+  border: none;
+  color: var(--text2);
   font-size: 12px;
   font-family: var(--mono);
   outline: none;
   cursor: pointer;
   color-scheme: dark;
-  width: 110px;
+  width: 90px;
+  padding: 0;
 }
 .add-btn {
   padding: 8px 18px;

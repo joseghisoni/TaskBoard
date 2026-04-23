@@ -124,15 +124,15 @@
     </div>
   </aside>
 
+  <!-- Botón hamburguesa fuera de #main para que no sea borrado por renderMain() -->
+  <button class="hamburger-btn" id="hamburger-btn" onclick="openSidebar()" aria-label="Abrir menu">
+    <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
+      <path d="M1 1h16M1 7h16M1 13h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </svg>
+  </button>
+
   <!-- ── Main content (rendered by JS) ───────────────────── -->
-  <main class="main" id="main">
-    <!-- Botón hamburguesa visible solo en mobile -->
-    <button class="hamburger-btn" id="hamburger-btn" onclick="openSidebar()" aria-label="Abrir menu">
-      <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
-        <path d="M1 1h16M1 7h16M1 13h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-      </svg>
-    </button>
-  </main>
+  <main class="main" id="main"></main>
 
 </div><!-- .app -->
 
