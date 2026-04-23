@@ -1126,7 +1126,12 @@ function buildAddForm() {
         </select>
         <input type="date" class="add-date" id="new-task-due" value="${defaultDate}">
         <label class="add-time-wrap">
-          <span class="add-time-label">hora</span>
+          <span class="add-time-icon">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.2"/>
+              <path d="M6 3.5V6l1.5 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            </svg>
+          </span>
           <input type="time" class="add-time" id="new-task-time">
         </label>
         <div style="flex:1"></div>

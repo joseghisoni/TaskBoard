@@ -374,6 +374,7 @@ body {
   flex-shrink: 0;
 }
 .task-row:hover .reschedule-btn { opacity: 1; }
+.task-row.cancelled .reschedule-btn { opacity: 1; }
 .reschedule-btn:hover { color: var(--text2); border-color: var(--text3); }
 
 /* Section dividers */
@@ -457,7 +458,7 @@ body {
 .add-time-wrap {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   background: var(--surface2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -465,10 +466,11 @@ body {
   cursor: pointer;
   white-space: nowrap;
 }
-.add-time-label {
-  font-size: 12px;
-  font-family: var(--mono);
+.add-time-icon {
   color: var(--text3);
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
   pointer-events: none;
 }
 .add-time {
@@ -480,8 +482,9 @@ body {
   outline: none;
   cursor: pointer;
   color-scheme: dark;
-  width: 90px;
+  width: 82px;
   padding: 0;
+  min-width: 0;
 }
 .add-btn {
   padding: 8px 18px;
@@ -991,10 +994,18 @@ body {
     justify-content: space-between;
   }
 
-  /* Main: padding reducido, espacio para el hamburguesa */
+  /* Main: mismo padding que el hamburguesa para alinear el header */
   .main {
     padding: 16px;
-    padding-top: 56px; /* espacio para el botón hamburguesa fijo */
+    padding-top: 14px;
+  }
+
+  /* Header: desplazado a la derecha del hamburguesa, alineado verticalmente */
+  .page-header {
+    padding-left: 52px;
+    min-height: 36px;
+    align-items: center;
+    margin-bottom: 14px;
   }
 
   /* Botón hamburguesa fijo arriba a la izquierda */
