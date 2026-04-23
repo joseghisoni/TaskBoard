@@ -82,20 +82,82 @@ let calendarYear  = new Date().getFullYear();
 let calendarSelectedDay = null;
 
 // Editing state for modals
-let editingHabitId = null;
+let editingHabitId     = null;
 let reschedulingTaskId = null;
 let pendingHabitDays   = [];
-let pendingDayLabels   = {};  // { "dow": "label" }
+let pendingDayLabels   = {};
+let pendingHabitFreq   = 'weekly';  // { "dow": "label" }
 
-function saveState() {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+// ── Firebase sync ─────────────────────────────────────────────
+// `db` es la instancia de Firestore. Se asigna en initFirebase()
+// si el usuario configuró firebase-config.js correctamente.
+let db             = null;
+let ownSaveInFlight = false; // evita que nuestro propio snapshot dispare un re-render
+
+function initFirebase() {
+  // typeof check: si firebase-config.js no está cargado o tiene valores vacíos,
+  // el app sigue funcionando solo con localStorage
+  if (typeof firebase === 'undefined' || typeof firebaseConfig === 'undefined') return;
+  if (firebaseConfig.apiKey === 'TU_API_KEY') return; // config sin completar
+
+  try {
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.firestore();
+    setupRealtimeSync();
+  } catch (e) {
+    console.warn('[Firebase] init error:', e.message);
+  }
 }
 
-function loadState() {
+function setupRealtimeSync() {
+  // onSnapshot escucha el documento en tiempo real.
+  // Cada vez que cambia (desde otro dispositivo), actualizamos el estado local.
+  db.collection('taskboard').doc('state').onSnapshot(snapshot => {
+    if (ownSaveInFlight) return; // fue nuestro propio guardado, lo ignoramos
+    if (!snapshot.exists) return;
+    const remote = snapshot.data();
+    if (!remote || !remote.tasks) return;
+    state = remote;
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+    render();
+  }, err => {
+    console.warn('[Firebase] snapshot error:', err.message);
+  });
+}
+
+function saveState() {
+  // 1. Guardamos en localStorage (instantáneo, funciona offline)
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+
+  // 2. Si Firebase está listo, sincronizamos a la nube en segundo plano
+  if (db) {
+    ownSaveInFlight = true;
+    db.collection('taskboard').doc('state').set(state)
+      .catch(e => console.warn('[Firebase] save error:', e.message))
+      .finally(() => { setTimeout(() => { ownSaveInFlight = false; }, 300); });
+  }
+}
+
+async function loadState() {
+  // Paso 1: cargamos localStorage para que la UI aparezca de inmediato
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) state = Object.assign({}, state, JSON.parse(saved));
   } catch (e) {}
+
+  // Paso 2: si Firebase está disponible, traemos la versión definitiva desde la nube
+  // (puede tener cambios hechos desde otro dispositivo)
+  if (db) {
+    try {
+      const snapshot = await db.collection('taskboard').doc('state').get();
+      if (snapshot.exists && snapshot.data()?.tasks) {
+        state = snapshot.data();
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); // actualizamos caché local
+      }
+    } catch (e) {
+      console.warn('[Firebase] load error, usando localStorage:', e.message);
+    }
+  }
 
   if (!state.tasks.length && !state.habits.length) seedDemoData();
   ensureWeeklyOccurrences();
@@ -186,6 +248,7 @@ function dueDateClass(due) {
 
 /** Which view section a task belongs to based on its due date */
 function taskSection(task) {
+  if (task.cancelled) return 'cancelled';
   if (!task.due) return 'luego';
   const today = todayStr(), yesterday = offsetDate(-1), endWeek = weekEnd();
   if (task.due === today || task.due === yesterday) return 'hoy';
@@ -198,37 +261,64 @@ function taskSection(task) {
 // ── 5. Habit occurrence generation ───────────────────────────────────────────
 
 /**
- * For each habit, ensure a linked task exists for every scheduled
- * day within the current week. Called on load and after habit edits.
+ * For each habit, ensure linked tasks exist for all scheduled dates.
+ * Weekly: current week only. Biweekly/monthly: rolling 60-day window.
  */
 function ensureWeeklyOccurrences() {
-  const ws = weekStart(), we = weekEnd();
+  const today   = todayStr();
+  const ws      = weekStart(), we = weekEnd();
+  const horizon = offsetDate(60);
 
   state.habits.forEach(habit => {
     if (!habit.occurrences) habit.occurrences = [];
     if (!habit.dayLabels)   habit.dayLabels   = {};
+    const freq = habit.freq || 'weekly';
 
-    habit.days.forEach(dow => {
-      const dateStr = weekdayDate(dow);
-      if (dateStr < ws || dateStr > we) return;
-
-      const alreadyExists = habit.occurrences.find(
-        o => o.date === dateStr && o.weekStart === ws
-      );
-      if (alreadyExists) return;
-
-      const taskId  = state.nextId++;
-      const dayLabel = habit.dayLabels[String(dow)];
-      const taskName = dayLabel ? `${habit.name} \u2014 ${dayLabel}` : habit.name;
-
-      state.tasks.push({
-        id: taskId, name: taskName, cat: habit.cat,
-        due: dateStr, done: false, habitId: habit.id,
+    if (freq === 'weekly') {
+      habit.days.forEach(dow => {
+        const dateStr = weekdayDate(dow);
+        if (dateStr < ws || dateStr > we) return;
+        if (habit.occurrences.find(o => o.date === dateStr && o.weekStart === ws)) return;
+        const taskId   = state.nextId++;
+        const dayLabel = habit.dayLabels[String(dow)];
+        const taskName = dayLabel ? habit.name + ' — ' + dayLabel : habit.name;
+        state.tasks.push({ id: taskId, name: taskName, cat: habit.cat, due: dateStr, done: false, habitId: habit.id });
+        habit.occurrences.push({ date: dateStr, weekStart: ws, taskId, done: false });
       });
-      habit.occurrences.push({
-        date: dateStr, weekStart: ws, taskId, done: false,
-      });
-    });
+
+    } else if (freq === 'biweekly') {
+      if (!habit.startDate) return;
+      const winStart = new Date(today + 'T12:00:00');
+      winStart.setDate(winStart.getDate() - 15);
+      const winEnd = new Date(horizon + 'T12:00:00');
+      let cur = new Date(habit.startDate + 'T12:00:00');
+      while (cur < winStart) cur.setDate(cur.getDate() + 15);
+      cur.setDate(cur.getDate() - 15);
+      if (cur < new Date(habit.startDate + 'T12:00:00')) cur = new Date(habit.startDate + 'T12:00:00');
+      while (cur <= winEnd) {
+        const ds = cur.getFullYear() + '-' + pad(cur.getMonth()+1) + '-' + pad(cur.getDate());
+        if (!habit.occurrences.find(o => o.date === ds)) {
+          const taskId = state.nextId++;
+          state.tasks.push({ id: taskId, name: habit.name, cat: habit.cat, due: ds, done: false, habitId: habit.id });
+          habit.occurrences.push({ date: ds, weekStart: null, taskId, done: false });
+        }
+        cur.setDate(cur.getDate() + 15);
+      }
+
+    } else if (freq === 'monthly') {
+      if (!habit.monthDay) return;
+      const base = new Date(today + 'T12:00:00');
+      for (let m = -1; m <= 3; m++) {
+        const d = new Date(base.getFullYear(), base.getMonth() + m, habit.monthDay);
+        if (d.getDate() !== habit.monthDay) continue;
+        const ds = d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate());
+        if (!habit.occurrences.find(o => o.date === ds)) {
+          const taskId = state.nextId++;
+          state.tasks.push({ id: taskId, name: habit.name, cat: habit.cat, due: ds, done: false, habitId: habit.id });
+          habit.occurrences.push({ date: ds, weekStart: null, taskId, done: false });
+        }
+      }
+    }
   });
 
   saveState();
@@ -266,11 +356,25 @@ function taskRowHTML(task) {
   }
   const habit  = task.habitId ? state.habits.find(h => h.id === task.habitId) : null;
 
+  if (task.cancelled) {
+    return `
+      <div class="task-row cancelled" onclick="event.stopPropagation()">
+        <div class="checkbox cancelled-x">&#x2205;</div>
+        <span class="task-name">${task.name}</span>
+        ${task.time ? `<span class="task-time">${task.time}</span>` : ''}
+        <span class="cat-badge" style="background:${catBg};color:${cat.color}">${getCat(task.cat).name}</span>
+        <span class="due-date ${dc}">${dl}</span>
+        <button class="reschedule-btn" onclick="restoreTask(${task.id}, event)">restaurar</button>
+        <button class="delete-btn" onclick="deleteTask(${task.id}, event)">&#x2715;</button>
+      </div>`;
+  }
+
   const habitBadge = habit
     ? `<span class="habit-badge ${task.done ? 'completed' : ''}">&#x21BB; ${habit.name}</span>`
     : '';
   const rescheduleBtnHTML = !task.done
-    ? `<button class="reschedule-btn" onclick="openEditTaskModal(${task.id}, event)">editar</button>`
+    ? `<button class="reschedule-btn" onclick="openEditTaskModal(${task.id}, event)">editar</button>
+       <button class="cancel-btn" onclick="cancelTask(${task.id}, event)">cancelar</button>`
     : '';
   const timeBadge = task.time
     ? `<span class="task-time">${task.time}</span>`
@@ -352,20 +456,77 @@ function buildTaskView() {
     ${buildStatChips()}
     ${buildToolbar()}
     <div class="task-list">
-      ${pending.length ? pending.map(taskRowHTML).join('') : '<div class="empty-state">Sin tareas pendientes &#x2713;</div>'}
+      ${currentView === 'semana' ? buildWeekPendingGroups(pending) : (pending.length ? pending.map(taskRowHTML).join('') : '<div class="empty-state">Sin tareas pendientes &#x2713;</div>')}
       ${done.length ? `<div class="section-divider">Completadas</div>${done.map(taskRowHTML).join('')}` : ''}
     </div>
     ${buildAddForm()}`;
 }
 
+function buildWeekPendingGroups(pending) {
+  if (!pending.length) return '<div class="empty-state">Sin tareas pendientes &#x2713;</div>';
+
+  const today    = todayStr();
+  const tomorrow = offsetDate(1);
+
+  // Group by due date preserving sort order
+  const groups = {};
+  pending.forEach(t => {
+    const key = t.due || '';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(t);
+  });
+
+  return Object.keys(groups).sort().map(dateStr => {
+    const d   = new Date(dateStr + 'T12:00:00');
+    const dow = DAY_NAMES_FULL[d.getDay()];
+    const num = d.getDate();
+    const prefix = dateStr === today    ? 'Hoy · '    :
+                   dateStr === tomorrow ? 'Mañana · ' : '';
+    const header = `${prefix}${dow} ${num}`;
+    return `
+      <div class="section-divider">${header}</div>
+      ${groups[dateStr].map(taskRowHTML).join('')}`;
+  }).join('');
+}
+
 function buildStatChips() {
   const today        = todayStr();
+  const overdueCount = state.tasks.filter(t => !t.done && !t.cancelled && t.due && t.due < today).length;
+
+  if (currentView === 'semana') {
+    const ws = weekStart(), we = weekEnd();
+    const allWeek      = state.tasks.filter(t => t.due && t.due >= ws && t.due <= we);
+    const doneWeek     = allWeek.filter(t => t.done).length;
+    const habitsWeek   = state.habits.filter(h =>
+      h.occurrences.some(o => o.weekStart === ws)
+    );
+    const habDoneWeek  = habitsWeek.filter(h =>
+      h.occurrences.some(o => o.weekStart === ws && o.done)
+    ).length;
+
+    return `
+      <div class="stat-row">
+        <div class="stat-chip">
+          <div class="value">${doneWeek}/${allWeek.length}</div>
+          <div class="label">tareas esta semana</div>
+        </div>
+        <div class="stat-chip">
+          <div class="value">${habDoneWeek}/${habitsWeek.length}</div>
+          <div class="label">rutinas esta semana</div>
+        </div>
+        ${overdueCount ? `
+          <div class="stat-chip" style="border-color:rgba(226,75,74,.3)">
+            <div class="value" style="color:var(--red)">${overdueCount}</div>
+            <div class="label">vencidas</div>
+          </div>` : ''}
+      </div>`;
+  }
+
   const allToday     = state.tasks.filter(t => t.due === today);
   const doneToday    = allToday.filter(t => t.done).length;
   const todayDow     = new Date().getDay();
   const habitsToday  = state.habits.filter(h => h.days.includes(todayDow));
   const habDoneToday = habitsToday.filter(h => h.occurrences.find(o => o.date === today && o.done)).length;
-  const overdueCount = state.tasks.filter(t => !t.done && t.due && t.due < today).length;
 
   return `
     <div class="stat-row">
@@ -472,9 +633,12 @@ function buildCategoryView(catId) {
 
 function buildOverdueView() {
   const today = todayStr();
-  const tasks = state.tasks
-    .filter(t => !t.done && t.due && t.due < today)
+  const overdue    = state.tasks
+    .filter(t => !t.done && !t.cancelled && t.due && t.due < today)
     .sort((a, b) => a.due > b.due ? 1 : -1);
+  const cancelled  = state.tasks
+    .filter(t => t.cancelled)
+    .sort((a, b) => (a.due || '') > (b.due || '') ? 1 : -1);
 
   return `
     <div class="page-header">
@@ -484,9 +648,12 @@ function buildOverdueView() {
       </div>
     </div>
     <div class="task-list">
-      ${tasks.length
-        ? tasks.map(taskRowHTML).join('')
+      ${overdue.length
+        ? overdue.map(taskRowHTML).join('')
         : '<div class="empty-state">No hay tareas vencidas &#x2713;</div>'}
+      ${cancelled.length
+        ? `<div class="section-divider">Canceladas</div>${cancelled.map(taskRowHTML).join('')}`
+        : ''}
     </div>
     ${buildAddForm()}`;
 }
@@ -509,18 +676,24 @@ function buildHabitsView() {
       const ds  = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
       const dow = d.getDay();
       const isScheduled = habit.days.includes(dow);
-      const occ     = habit.occurrences.find(o => o.date === ds);
-      const isDone  = !!(occ && occ.done);
-      const isFuture = ds > today;
-      const isToday  = ds === today;
+      const occ        = habit.occurrences.find(o => o.date === ds);
+      const isDone     = !!(occ && occ.done);
+      const isFuture   = ds > today;
+      const isToday    = ds === today;
+      const linkedTask = occ ? state.tasks.find(t => t.id === occ.taskId) : null;
+      const isDoneLate = isDone && linkedTask?.completedAt && linkedTask.completedAt > ds;
 
       let dotClass = 'streak-dot ';
-      if (isDone)                                dotClass += 'sd-done';
+      if (isDoneLate)                                dotClass += 'sd-late';
+      else if (isDone)                               dotClass += 'sd-done';
       else if (isScheduled && !isFuture && !isToday) dotClass += 'sd-miss';
-      else if (isFuture)                         dotClass += 'sd-future';
-      else                                       dotClass += 'sd-off';
+      else if (isFuture)                             dotClass += 'sd-future';
+      else                                           dotClass += 'sd-off';
 
-      const tooltip = `${DAY_NAMES_SHORT[dow]} ${formatDateShort(ds)}${isScheduled ? ' (prog)' : ''}${isDone ? ' ok' : ''}`;
+      const tooltipSuffix = isDoneLate
+        ? ` recuperado el ${DAY_NAMES_SHORT[new Date(linkedTask.completedAt+'T12:00:00').getDay()]} ${formatDateShort(linkedTask.completedAt)}`
+        : isDone ? ' ok' : '';
+      const tooltip = `${DAY_NAMES_SHORT[dow]} ${formatDateShort(ds)}${isScheduled ? ' (prog)' : ''}${tooltipSuffix}`;
       return `<div class="${dotClass}" title="${tooltip}"></div>`;
     }).join('');
 
@@ -528,30 +701,89 @@ function buildHabitsView() {
       `<span class="day-pill ${habit.days.includes(i) ? 'scheduled' : ''}">${name}</span>`
     ).join('');
 
-    const thisWeekOccs = habit.occurrences
-      .filter(o => o.weekStart === ws)
-      .sort((a, b) => a.date > b.date ? 1 : -1);
 
-    const occurrenceItems = thisWeekOccs.map(o => {
-      const dc   = dueDateClass(o.date);
-      const dotColor = o.done ? 'var(--accent)'
-        : dc === 'overdue' ? 'var(--red)'
-        : dc === 'today'   ? 'var(--amber)'
-        : 'var(--surface3)';
+    const freq = habit.freq || 'weekly';
+
+    if (freq !== 'weekly') {
+      // ── Non-weekly card (biweekly / monthly) ────────────────
+      const sortedOccs  = [...habit.occurrences].sort((a, b) => a.date > b.date ? 1 : -1);
+      const pastOccs    = sortedOccs.filter(o => o.date < today).slice(-4);
+      const futureOccs  = sortedOccs.filter(o => o.date >= today).slice(0, 3);
+      const nextOcc     = futureOccs[0];
+      const isDoneNext  = !!(nextOcc && nextOcc.done);
+
+      const historyDots = pastOccs.map(o => {
+        const linkedTask  = state.tasks.find(t => t.id === o.taskId);
+        const isDoneLate  = o.done && linkedTask && linkedTask.completedAt && linkedTask.completedAt > o.date;
+        const cls = 'streak-dot ' + (isDoneLate ? 'sd-late' : o.done ? 'sd-done' : 'sd-miss');
+        const tip = formatDateShort(o.date) + (o.done ? ' ok' : ' miss');
+        return `<div class="${cls}" title="${tip}"></div>`;
+      }).join('');
+
+      const freqLabel = freq === 'monthly'
+        ? `mensual · día ${habit.monthDay}`
+        : `cada 15 días · desde ${formatDateShort(habit.startDate)}`;
+
+      const nextLabel = !nextOcc ? '—'
+        : nextOcc.date === today ? 'Hoy'
+        : nextOcc.date === offsetDate(1) ? 'Mañana'
+        : DAY_NAMES_FULL[new Date(nextOcc.date + 'T12:00:00').getDay()] + ' ' + formatDateShort(nextOcc.date);
+
+      const makeOccItem = (occsToShow) => occsToShow.map(o => {
+      const dc        = dueDateClass(o.date);
+      const dotColor  = o.done ? 'var(--accent)' : dc === 'overdue' ? 'var(--red)' : dc === 'today' ? 'var(--amber)' : 'var(--surface3)';
       const linkedTask = state.tasks.find(t => t.id === o.taskId);
-      const label = linkedTask ? linkedTask.name : habit.name;
-      const dayAbbr = DAY_NAMES_FULL[new Date(o.date + 'T12:00:00').getDay()].slice(0, 3);
-      const dayColor = o.done ? 'var(--text3)' : dc === 'today' ? 'var(--accent)' : dc === 'overdue' ? 'var(--red)' : 'var(--text3)';
-
+      const label     = linkedTask ? linkedTask.name : habit.name;
+      const dateLabel = o.date === today ? 'Hoy' : o.date === offsetDate(1) ? 'Man' : DAY_NAMES_FULL[new Date(o.date + 'T12:00:00').getDay()].slice(0,3) + ' ' + formatDateShort(o.date);
+      const dayColor  = o.done ? 'var(--text3)' : dc === 'today' ? 'var(--accent)' : dc === 'overdue' ? 'var(--red)' : 'var(--text3)';
       return `
         <div class="occurrence-item">
           <div class="occurrence-dot" style="background:${dotColor}"></div>
           <span style="flex:1">${label}</span>
-          <span style="color:${dayColor}">${dayAbbr}</span>
+          <span style="color:${dayColor}">${dateLabel}</span>
           ${o.done ? '<span style="color:var(--accent)">&#x2713;</span>' : ''}
         </div>`;
     }).join('');
+      const occurrenceItems = makeOccItem(futureOccs);
 
+      return `
+        <div class="habit-card ${isDoneNext && nextOcc.date === today ? 'done-today' : ''}">
+          <div class="habit-card-top">
+            <span class="habit-card-name">${habit.name}</span>
+            <button onclick="openEditHabitModal('${habit.id}')"
+                  style="background:none;border:none;color:var(--text3);cursor:pointer;
+                         font-size:13px;padding:2px 6px;border-radius:4px;transition:color .15s"
+                  onmouseover="this.style.color='var(--text)'"
+                  onmouseout="this.style.color='var(--text3)'">&#x270E;</button>
+          </div>
+          <div style="font-size:11px;color:var(--text3);font-family:var(--mono);margin-bottom:8px">${freqLabel}</div>
+          <div class="streak-row">${historyDots}</div>
+          <div class="habit-card-meta">próxima: ${nextLabel}</div>
+          ${occurrenceItems ? `<div class="occurrence-list">${occurrenceItems}</div>` : ''}
+        </div>`;
+    }
+
+    // ── Weekly card (existing display) ───────────────────────
+    const thisWeekOccs = habit.occurrences
+      .filter(o => o.weekStart === ws)
+      .sort((a, b) => a.date > b.date ? 1 : -1);
+
+    const makeOccItemWeekly = (occsToShow) => occsToShow.map(o => {
+      const dc        = dueDateClass(o.date);
+      const dotColor  = o.done ? 'var(--accent)' : dc === 'overdue' ? 'var(--red)' : dc === 'today' ? 'var(--amber)' : 'var(--surface3)';
+      const linkedTask = state.tasks.find(t => t.id === o.taskId);
+      const label     = linkedTask ? linkedTask.name : habit.name;
+      const dateLabel = o.date === today ? 'Hoy' : o.date === offsetDate(1) ? 'Man' : DAY_NAMES_FULL[new Date(o.date + 'T12:00:00').getDay()].slice(0,3) + ' ' + formatDateShort(o.date);
+      const dayColor  = o.done ? 'var(--text3)' : dc === 'today' ? 'var(--accent)' : dc === 'overdue' ? 'var(--red)' : 'var(--text3)';
+      return `
+        <div class="occurrence-item">
+          <div class="occurrence-dot" style="background:${dotColor}"></div>
+          <span style="flex:1">${label}</span>
+          <span style="color:${dayColor}">${dateLabel}</span>
+          ${o.done ? '<span style="color:var(--accent)">&#x2713;</span>' : ''}
+        </div>`;
+    }).join('');
+    const occurrenceItems = makeOccItemWeekly(thisWeekOccs);
     const doneThisWeek = thisWeekOccs.filter(o => o.done).length;
 
     return `
@@ -935,6 +1167,18 @@ function toggleTask(taskId) {
   render();
 }
 
+function cancelTask(taskId, event) {
+  event.stopPropagation();
+  const task = state.tasks.find(t => t.id === taskId);
+  if (task) { task.cancelled = true; saveState(); render(); }
+}
+
+function restoreTask(taskId, event) {
+  event.stopPropagation();
+  const task = state.tasks.find(t => t.id === taskId);
+  if (task) { task.cancelled = false; saveState(); render(); }
+}
+
 function deleteTask(taskId, event) {
   event.stopPropagation();
   const task = state.tasks.find(t => t.id === taskId);
@@ -1026,17 +1270,19 @@ function confirmEditTask() {
 // ── 18. Habit CRUD ────────────────────────────────────────────────────────────
 
 function openNewHabitModal() {
-  editingHabitId    = null;
-  pendingHabitDays  = [];
-  pendingDayLabels  = {};
+  editingHabitId   = null;
+  pendingHabitDays = [];
+  pendingDayLabels = {};
+  pendingHabitFreq = 'weekly';
 
-  document.getElementById('habit-modal-title').textContent = 'Nueva rutina';
-  document.getElementById('habit-name-input').value        = '';
-  document.getElementById('habit-delete-btn').style.display = 'none';
-  document.getElementById('day-labels-section').style.display = 'none';
-  document.getElementById('day-labels-container').innerHTML   = '';
+  document.getElementById('habit-modal-title').textContent    = 'Nueva rutina';
+  document.getElementById('habit-name-input').value           = '';
+  document.getElementById('habit-delete-btn').style.display   = 'none';
+  document.getElementById('habit-freq-select').value          = 'weekly';
+  document.getElementById('habit-start-date').value           = todayStr();
 
   populateHabitCatSelect(null);
+  refreshHabitFreqUI();
   refreshDayToggleButtons();
   document.getElementById('habit-modal').classList.add('open');
 }
@@ -1046,14 +1292,19 @@ function openEditHabitModal(habitId) {
   if (!habit) return;
 
   editingHabitId   = habitId;
-  pendingHabitDays = [...habit.days];
+  pendingHabitDays = [...(habit.days || [])];
   pendingDayLabels = Object.assign({}, habit.dayLabels || {});
+  pendingHabitFreq = habit.freq || 'weekly';
 
   document.getElementById('habit-modal-title').textContent   = 'Editar rutina';
   document.getElementById('habit-name-input').value          = habit.name;
   document.getElementById('habit-delete-btn').style.display  = '';
+  document.getElementById('habit-freq-select').value         = pendingHabitFreq;
+  document.getElementById('habit-month-day').value           = habit.monthDay || '';
+  document.getElementById('habit-start-date').value          = habit.startDate || '';
 
   populateHabitCatSelect(habit.cat);
+  refreshHabitFreqUI();
   refreshDayToggleButtons();
   renderDayLabelInputs();
   document.getElementById('habit-modal').classList.add('open');
@@ -1063,6 +1314,28 @@ function populateHabitCatSelect(selectedId) {
   document.getElementById('habit-cat-select').innerHTML = state.categories
     .map(c => `<option value="${c.id}"${c.id === selectedId ? ' selected' : ''}>${c.name}</option>`)
     .join('');
+}
+
+function refreshHabitFreqUI() {
+  const freq = document.getElementById('habit-freq-select').value;
+  pendingHabitFreq = freq;
+  document.getElementById('habit-weekly-fields').style.display  = freq === 'weekly'   ? '' : 'none';
+  document.getElementById('habit-monthly-field').style.display  = freq === 'monthly'  ? '' : 'none';
+  document.getElementById('habit-biweekly-field').style.display = freq === 'biweekly' ? '' : 'none';
+  if (freq !== 'weekly') {
+    document.getElementById('day-labels-section').style.display = 'none';
+  }
+}
+
+function refreshHabitFreqUI() {
+  const freq = document.getElementById('habit-freq-select').value;
+  pendingHabitFreq = freq;
+  document.getElementById('habit-weekly-fields').style.display  = freq === 'weekly'   ? '' : 'none';
+  document.getElementById('habit-monthly-field').style.display  = freq === 'monthly'  ? '' : 'none';
+  document.getElementById('habit-biweekly-field').style.display = freq === 'biweekly' ? '' : 'none';
+  if (freq !== 'weekly') {
+    document.getElementById('day-labels-section').style.display = 'none';
+  }
 }
 
 function refreshDayToggleButtons() {
@@ -1107,8 +1380,15 @@ function renderDayLabelInputs() {
 
 function saveHabit() {
   const name = document.getElementById('habit-name-input').value.trim();
-  if (!name)                 { alert('Ingresa un nombre.'); return; }
-  if (!pendingHabitDays.length) { alert('Selecciona al menos un dia.'); return; }
+  if (!name) { alert('Ingresa un nombre.'); return; }
+
+  const freq      = document.getElementById('habit-freq-select').value;
+  const monthDay  = freq === 'monthly'  ? parseInt(document.getElementById('habit-month-day').value) || null : null;
+  const startDate = freq === 'biweekly' ? document.getElementById('habit-start-date').value || null           : null;
+
+  if (freq === 'weekly'   && !pendingHabitDays.length) { alert('Selecciona al menos un dia.'); return; }
+  if (freq === 'monthly'  && !monthDay)                { alert('Ingresa el dia del mes.'); return; }
+  if (freq === 'biweekly' && !startDate)               { alert('Ingresa la fecha de inicio.'); return; }
 
   const cat = document.getElementById('habit-cat-select').value;
 
@@ -1123,27 +1403,56 @@ function saveHabit() {
     const habit = state.habits.find(h => h.id === editingHabitId);
     habit.name      = name;
     habit.cat       = cat;
-    habit.dayLabels = pendingDayLabels;
+    habit.freq      = freq;
+    habit.monthDay  = monthDay;
+    habit.startDate = startDate;
+    habit.dayLabels = freq === 'weekly' ? pendingDayLabels : {};
 
-    // Remove tasks for days that were unscheduled
-    const today       = todayStr();
-    const removedDays = habit.days.filter(d => !pendingHabitDays.includes(d));
-    removedDays.forEach(removedDow => {
+    // Sync category and name to all linked tasks
+    habit.occurrences.forEach(occ => {
+      const t = state.tasks.find(t => t.id === occ.taskId);
+      if (!t) return;
+      t.cat = cat;
+      if (freq === 'weekly') {
+        const dow = new Date(t.due + 'T12:00:00').getDay();
+        const label = pendingDayLabels[String(dow)];
+        t.name = label ? name + ' — ' + label : name;
+      } else {
+        t.name = name;
+      }
+    });
+
+    const today = todayStr();
+    if (freq === 'weekly') {
+      const removedDays = (habit.days || []).filter(d => !pendingHabitDays.includes(d));
+      removedDays.forEach(removedDow => {
+        habit.occurrences = habit.occurrences.filter(occ => {
+          if (occ.date >= today && !occ.done && new Date(occ.date + 'T12:00:00').getDay() === removedDow) {
+            state.tasks = state.tasks.filter(t => t.id !== occ.taskId);
+            return false;
+          }
+          return true;
+        });
+      });
+      habit.days = pendingHabitDays;
+    } else {
+      // Remove future undone occurrences so ensureWeeklyOccurrences regenerates correctly
       habit.occurrences = habit.occurrences.filter(occ => {
-        if (occ.date >= today && !occ.done && new Date(occ.date + 'T12:00:00').getDay() === removedDow) {
+        if (occ.date >= today && !occ.done) {
           state.tasks = state.tasks.filter(t => t.id !== occ.taskId);
           return false;
         }
         return true;
       });
-    });
-    habit.days = pendingHabitDays;
+      habit.days = [];
+    }
   } else {
     state.habits.push({
       id: 'hb' + state.nextId++,
-      name, cat,
-      dayLabels: pendingDayLabels,
-      days: pendingHabitDays,
+      name, cat, freq,
+      dayLabels: freq === 'weekly' ? pendingDayLabels : {},
+      days: freq === 'weekly' ? pendingHabitDays : [],
+      monthDay, startDate,
       occurrences: [],
     });
   }
@@ -1305,8 +1614,9 @@ function buildCalendarView() {
     const pills = shown.map(t => {
       const cat = getCat(t.cat);
       return `<div class="cal-task-pill${t.done ? ' done' : ''}"
-        style="background:${hexToRgba(cat.color, .18)};color:${cat.color}"
-        >${t.name}</div>`;
+        style="background:${hexToRgba(cat.color, .18)};color:${cat.color}">
+        <span class="cal-pill-name">${t.name}</span>${t.time ? `<span class="cal-pill-time">${t.time}</span>` : ''}
+      </div>`;
     }).join('');
 
     const extraBadge = extra > 0
@@ -1373,6 +1683,7 @@ function setView(viewName) {
   filterCatId = null;
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.getElementById('nav-' + viewName)?.classList.add('active');
+  closeSidebar();
   render();
 }
 
@@ -1380,7 +1691,7 @@ function setCategoryFilter(catId) {
   filterCatId = catId;
   if (!catId) { render(); return; }
   // Stay on current task view (not habits/log)
-  if (currentView === 'habitos' || currentView === 'log') currentView = 'hoy';
+  if (['habitos', 'log', 'stats', 'calendario'].includes(currentView)) currentView = 'hoy';
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.getElementById('nav-' + currentView)?.classList.add('active');
   render();
@@ -1390,6 +1701,13 @@ function setSortBy(value) { sortBy = value; render(); }
 
 function clearLog() {
   if (confirm('Limpiar todo el log?')) { state.log = []; saveState(); render(); }
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') || 'dark';
+  const next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('theme', next);
 }
 
 function closeModal(modalId) {
@@ -1419,7 +1737,7 @@ function renderNavCounts() {
   document.getElementById('cnt-luego').textContent =
     state.tasks.filter(t => !t.done && (!t.due || t.due > endWeek)).length;
 
-  const overdueCount = state.tasks.filter(t => !t.done && t.due && t.due < today).length;
+  const overdueCount = state.tasks.filter(t => !t.done && !t.cancelled && t.due && t.due < today).length;
   const ovEl = document.getElementById('cnt-vencidas');
   ovEl.textContent  = overdueCount || '';
   ovEl.className    = 'count' + (overdueCount ? ' red' : '');
@@ -1441,5 +1759,9 @@ document.querySelectorAll('.modal-backdrop').forEach(el =>
   })
 );
 
-loadState();
-render();
+function openSidebar()  { document.getElementById('sidebar').classList.add('open');  document.getElementById('sidebar-overlay').classList.add('open'); }
+function closeSidebar() { document.getElementById('sidebar').classList.remove('open'); document.getElementById('sidebar-overlay').classList.remove('open'); }
+
+// Arranque: primero Firebase (detecta config), luego carga datos, luego pinta
+initFirebase();
+loadState().then(() => render());

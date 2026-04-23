@@ -49,6 +49,35 @@
 }
 
 
+/* ── 1b. Light mode overrides ──────────────────────────────── */
+[data-theme="light"] {
+  --bg:         #f4f4f2;
+  --surface:    #ffffff;
+  --surface2:   #ebebea;
+  --surface3:   #e0e0de;
+
+  --border:     rgba(0,0,0,0.08);
+  --border2:    rgba(0,0,0,0.16);
+
+  --text:       #18181a;
+  --text2:      #52524e;
+  --text3:      #9a9a96;
+
+  --accent:     #4a8000;
+  --accent-dim: rgba(74,128,0,0.10);
+  --red:        #c9342a;
+  --amber:      #b86a00;
+}
+
+[data-theme="light"] input[type="date"],
+[data-theme="light"] input[type="time"] { color-scheme: light; }
+
+[data-theme="light"] .theme-icon-dark  { display: none; }
+[data-theme="light"] .theme-icon-light { display: flex; }
+[data-theme="dark"]  .theme-icon-dark  { display: flex; }
+[data-theme="dark"]  .theme-icon-light { display: none; }
+
+
 /* ── 2. Reset & base ───────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { font-size: 14px; }
@@ -141,6 +170,26 @@ body {
   transition: all .15s;
 }
 .manage-cats-btn:hover { color: var(--text2); background: var(--surface2); }
+.theme-toggle-btn {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: none;
+  border: 1px dashed var(--border2);
+  border-radius: var(--radius-sm);
+  color: var(--text3);
+  font-size: 12px;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: all .15s;
+}
+.theme-toggle-btn:hover { color: var(--text2); background: var(--surface2); }
+.theme-icon-dark, .theme-icon-light {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: center;
+}
 
 
 /* ── 5. Page header & stat chips ───────────────────────────── */
@@ -246,6 +295,11 @@ body {
   white-space: nowrap;
 }
 .task-row.done .task-name { text-decoration: line-through; color: var(--text3); }
+.task-row.cancelled { opacity: .45; }
+.task-row.cancelled .task-name { text-decoration: line-through; color: var(--text3); }
+.cancelled-x { font-size: 14px; color: var(--text3); display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex-shrink: 0; }
+.cancel-btn { background: none; border: none; color: var(--text3); font-size: 11px; font-family: var(--font); cursor: pointer; padding: 2px 6px; border-radius: 4px; transition: color .15s; white-space: nowrap; }
+.cancel-btn:hover { color: var(--red); }
 
 .cat-badge {
   font-size: 10px;
@@ -466,6 +520,7 @@ body {
 .streak-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; transition: background .2s; }
 .streak-dot.sd-off    { background: var(--surface3); }
 .streak-dot.sd-done   { background: var(--accent); }
+.streak-dot.sd-late   { background: var(--amber); }
 .streak-dot.sd-miss   { background: rgba(226,75,74,0.55); }
 .streak-dot.sd-future { background: var(--surface2); border: 1px solid var(--border2); }
 
@@ -833,10 +888,24 @@ body {
   font-size: 10px;
   padding: 2px 5px;
   border-radius: 3px;
-  white-space: nowrap;
+  overflow: hidden;
+  line-height: 1.4;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.cal-pill-name {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
-  line-height: 1.4;
+  white-space: nowrap;
+}
+.cal-pill-time {
+  font-family: var(--mono);
+  font-size: 9px;
+  opacity: .75;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .cal-task-pill.done { opacity: .35; text-decoration: line-through; }
 .cal-extra { font-size: 10px; color: var(--text3); padding: 1px 4px; }
@@ -853,7 +922,109 @@ body {
 }
 
 
-/* ── 13. Utilities ─────────────────────────────────────────── */
+/* ── 13. Mobile responsive ─────────────────────────────────── */
+
+/* El botón hamburguesa y el overlay están ocultos en desktop */
+.hamburger-btn   { display: none; }
+.sidebar-overlay { display: none; }
+.sidebar-close-btn {
+  display: none;
+  background: none; border: none; color: var(--text3);
+  font-size: 16px; cursor: pointer; margin-left: auto; padding: 2px 4px;
+}
+
+@media (max-width: 768px) {
+  /* Layout: sidebar fuera del flujo, main ocupa todo */
+  .app {
+    grid-template-columns: 1fr;
+  }
+
+  /* Sidebar: panel deslizante desde la izquierda */
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0;
+    height: 100dvh;
+    width: 260px;
+    z-index: 200;
+    transform: translateX(-100%);
+    transition: transform .25s ease;
+    box-shadow: 4px 0 24px rgba(0,0,0,.35);
+  }
+  .sidebar.open { transform: translateX(0); }
+
+  /* Overlay oscuro detrás del sidebar */
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.45);
+    z-index: 199;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .25s ease;
+  }
+  .sidebar-overlay.open { opacity: 1; pointer-events: all; }
+
+  /* Botón de cierre dentro del sidebar */
+  .sidebar-close-btn { display: block; }
+
+  /* Logo del sidebar con botón de cierre en la misma fila */
+  .sidebar-logo {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  /* Main: padding reducido, espacio para el hamburguesa */
+  .main {
+    padding: 16px;
+    padding-top: 56px; /* espacio para el botón hamburguesa fijo */
+  }
+
+  /* Botón hamburguesa fijo arriba a la izquierda */
+  .hamburger-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    top: 14px; left: 14px;
+    z-index: 100;
+    width: 36px; height: 36px;
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius-sm);
+    color: var(--text2);
+    cursor: pointer;
+    transition: background .15s;
+  }
+  .hamburger-btn:hover { background: var(--surface2); }
+
+  /* Ajustes de contenido para pantalla chica */
+  .page-title { font-size: 18px; }
+  .stat-row   { gap: 8px; }
+  .stat-chip  { padding: 8px 12px; }
+  .stat-chip .value { font-size: 16px; }
+
+  /* Task rows: ocultar botones editar/cancelar en pantalla muy chica,
+     mostrarlos al tocar la fila (handled via CSS :active) */
+  .task-row { padding: 10px 10px; gap: 6px; }
+  .reschedule-btn, .cancel-btn { font-size: 10px; padding: 2px 5px; }
+
+  /* Calendario: celdas más chicas en mobile */
+  .cal-day { min-height: 60px; padding: 4px 3px; }
+  .cal-day-num { font-size: 10px; width: 18px; height: 18px; }
+  .cal-task-pill { font-size: 9px; }
+  .cal-header-cell { font-size: 9px; }
+
+  /* Habits grid: 1 columna en mobile */
+  .habits-grid { grid-template-columns: 1fr !important; }
+
+  /* Modal: ocupa más ancho */
+  .modal { width: 92vw !important; max-width: 400px; }
+}
+
+
+/* ── 14. Utilities ─────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 2px; }
