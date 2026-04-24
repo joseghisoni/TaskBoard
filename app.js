@@ -202,6 +202,12 @@ function todayStr() {
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 }
 
+// ISO-like timestamp en hora local (evita que toISOString() cambie la fecha por UTC offset)
+function nowLocalISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 function offsetDate(n) {
   const d = new Date();
   d.setDate(d.getDate() + n);
@@ -853,7 +859,8 @@ function buildLogView() {
 
     const items = entries.map(entry => {
       const cat  = getCat(entry.cat);
-      const time = new Date(entry.completedAt).toLocaleTimeString('es-AR', { hour:'2-digit', minute:'2-digit' });
+      const timeParts = entry.completedAt.split('T')[1] || '';
+      const time = timeParts.slice(0, 5) || '';
 
       return `
         <div class="log-item">
@@ -1156,7 +1163,7 @@ function toggleTask(taskId) {
       id: state.nextId++,
       name: task.name,
       cat: task.cat,
-      completedAt: new Date().toISOString(),
+      completedAt: nowLocalISO(),
       habitId: task.habitId || null,
     });
     // Mark habit occurrence as done
